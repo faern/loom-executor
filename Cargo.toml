@@ -1,0 +1,16 @@
+[package]
+name = "loom-executor"
+version = "0.1.0"
+description = "A loom aware async executor"
+authors = ["Linus Färnstrand <faern@faern.net>"]
+edition = "2018"
+
+[target.'cfg(loom)'.dependencies]
+loom = "0.3.3"
+#loom = { path = "/Users/faern/src/loom" }
+
+[dev-dependencies]
+futures = "0.3.4"
+
+[dependencies]
+oneshot = { git = "https://github.com/faern/oneshot", branch = "experiment" }
