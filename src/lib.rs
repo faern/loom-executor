@@ -1,35 +1,6 @@
-#[cfg(loom)]
 use loom::sync::{Arc, Condvar, Mutex};
-#[cfg(not(loom))]
-use std::sync::{Arc, Condvar, Mutex};
-
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
-struct Park(Mutex<bool>, Condvar);
-
-impl Default for Park {
-    fn default() -> Self {
-        Park(Mutex::new(false), Condvar::new())
-    }
-}
-
-fn unpark(park: &Park) {
-    *park.0.lock().unwrap() = true;
-    park.1.notify_one();
-}
-
-static VTABLE: RawWakerVTable = RawWakerVTable::new(
-    |clone_me| unsafe {
-        let arc = Arc::from_raw(clone_me as *const Park);
-        std::mem::forget(arc.clone());
-        RawWaker::new(Arc::into_raw(arc) as *const (), &VTABLE)
-    },
-    |wake_me| unsafe { unpark(&Arc::from_raw(wake_me as *const Park)) },
-    |wake_by_ref_me| unsafe { unpark(&*(wake_by_ref_me as *const Park)) },
-    |drop_me| unsafe { drop(Arc::from_raw(drop_me as *const Park)) },
-);
-
-/// Run a `Future`.
 pub fn block_on<F: std::future::Future>(mut f: F) -> F::Output {
     let mut f = unsafe { std::pin::Pin::new_unchecked(&mut f) };
     let park = Arc::new(Park::default());
@@ -50,4 +21,44 @@ pub fn block_on<F: std::future::Future>(mut f: F) -> F::Output {
             Poll::Ready(val) => return val,
         }
     }
+}
+
+struct Park(Mutex<bool>, Condvar);
+
+impl Default for Park {
+    fn default() -> Self {
+        Park(Mutex::new(false), Condvar::new())
+    }
+}
+
+impl Park {
+    pub fn unpark(&self) {
+        *self.0.lock().unwrap() = true;
+        self.1.notify_one();
+    }
+}
+
+static VTABLE: RawWakerVTable = RawWakerVTable::new(
+    raw_waker_clone,
+    raw_waker_wake,
+    raw_waker_wake_by_ref,
+    raw_waker_drop,
+);
+
+unsafe fn raw_waker_clone(park_ptr: *const ()) -> RawWaker {
+    let arc = Arc::from_raw(park_ptr as *const Park);
+    std::mem::forget(arc.clone());
+    RawWaker::new(Arc::into_raw(arc) as *const (), &VTABLE)
+}
+
+unsafe fn raw_waker_wake(park_ptr: *const ()) {
+    Arc::from_raw(park_ptr as *const Park).unpark()
+}
+
+unsafe fn raw_waker_wake_by_ref(park_ptr: *const ()) {
+    (&*(park_ptr as *const Park)).unpark()
+}
+
+unsafe fn raw_waker_drop(park_ptr: *const ()) {
+    drop(Arc::from_raw(park_ptr as *const Park))
 }

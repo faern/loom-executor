@@ -5,8 +5,5 @@ description = "A loom aware async executor"
 authors = ["Linus Färnstrand <faern@faern.net>"]
 edition = "2018"
 
-[target.'cfg(loom)'.dependencies]
-loom = "0.3.3"
-#loom = { path = "/Users/faern/src/loom" }
-
 [dependencies]
+loom = "0.3.3"
