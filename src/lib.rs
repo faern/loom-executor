@@ -1,40 +1,40 @@
-use loom::sync::{Arc, Condvar, Mutex};
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use core::mem;
+use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+use loom::sync::atomic::{AtomicBool, Ordering};
+use loom::sync::Arc;
 
+/// Runs a future to completion
 pub fn block_on<F: std::future::Future>(mut f: F) -> F::Output {
-    let mut f = unsafe { std::pin::Pin::new_unchecked(&mut f) };
-    let park = Arc::new(Park::default());
-    let sender = Arc::into_raw(park.clone());
-    let raw_waker = RawWaker::new(sender as *const _, &VTABLE);
-    let waker = unsafe { Waker::from_raw(raw_waker) };
+    let mut f = unsafe { core::pin::Pin::new_unchecked(&mut f) };
+    let loom_waker = Arc::new(LoomWaker::default());
+    let waker = {
+        let loom_waker_ptr = Arc::into_raw(loom_waker.clone());
+        let raw_waker = RawWaker::new(loom_waker_ptr as *const _, &VTABLE);
+        unsafe { Waker::from_raw(raw_waker) }
+    };
     let mut cx = Context::from_waker(&waker);
 
     loop {
         match f.as_mut().poll(&mut cx) {
-            Poll::Pending => {
-                let mut runnable = park.0.lock().unwrap();
-                while !*runnable {
-                    runnable = park.1.wait(runnable).unwrap();
-                }
-                *runnable = false;
-            }
-            Poll::Ready(val) => return val,
+            Poll::Pending => loom_waker.sleep(),
+            Poll::Ready(val) => break val,
         }
     }
 }
 
-struct Park(Mutex<bool>, Condvar);
+#[derive(Default)]
+struct LoomWaker(AtomicBool);
 
-impl Default for Park {
-    fn default() -> Self {
-        Park(Mutex::new(false), Condvar::new())
+impl LoomWaker {
+    pub fn wake(&self) {
+        self.0.store(true, Ordering::SeqCst);
     }
-}
 
-impl Park {
-    pub fn unpark(&self) {
-        *self.0.lock().unwrap() = true;
-        self.1.notify_one();
+    pub fn sleep(&self) {
+        while !self.0.load(Ordering::SeqCst) {
+            loom::thread::yield_now();
+        }
+        self.0.store(false, Ordering::SeqCst);
     }
 }
 
@@ -45,20 +45,20 @@ static VTABLE: RawWakerVTable = RawWakerVTable::new(
     raw_waker_drop,
 );
 
-unsafe fn raw_waker_clone(park_ptr: *const ()) -> RawWaker {
-    let arc = Arc::from_raw(park_ptr as *const Park);
-    std::mem::forget(arc.clone());
-    RawWaker::new(Arc::into_raw(arc) as *const (), &VTABLE)
+unsafe fn raw_waker_clone(waker_ptr: *const ()) -> RawWaker {
+    let waker = Arc::from_raw(waker_ptr as *const LoomWaker);
+    mem::forget(waker.clone());
+    RawWaker::new(Arc::into_raw(waker) as *const (), &VTABLE)
 }
 
-unsafe fn raw_waker_wake(park_ptr: *const ()) {
-    Arc::from_raw(park_ptr as *const Park).unpark()
+unsafe fn raw_waker_wake(waker_ptr: *const ()) {
+    Arc::from_raw(waker_ptr as *const LoomWaker).wake()
 }
 
-unsafe fn raw_waker_wake_by_ref(park_ptr: *const ()) {
-    (&*(park_ptr as *const Park)).unpark()
+unsafe fn raw_waker_wake_by_ref(waker_ptr: *const ()) {
+    (&*(waker_ptr as *const LoomWaker)).wake()
 }
 
-unsafe fn raw_waker_drop(park_ptr: *const ()) {
-    drop(Arc::from_raw(park_ptr as *const Park))
+unsafe fn raw_waker_drop(waker_ptr: *const ()) {
+    mem::drop(Arc::from_raw(waker_ptr as *const LoomWaker))
 }
