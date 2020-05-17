@@ -9,8 +9,4 @@ edition = "2018"
 loom = "0.3.3"
 #loom = { path = "/Users/faern/src/loom" }
 
-[dev-dependencies]
-futures = "0.3.4"
-
 [dependencies]
-oneshot = { git = "https://github.com/faern/oneshot", branch = "experiment" }
