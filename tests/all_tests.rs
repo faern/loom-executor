@@ -41,15 +41,13 @@ impl std::future::Future for Delay {
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         if !self.thread_spawned {
+            self.thread_spawned = true;
             let done = self.done.clone();
             let waker = cx.waker().clone();
             thread::spawn(move || {
-                thread::yield_now();
-
                 done.store(true, Ordering::SeqCst);
                 waker.wake();
             });
-            self.thread_spawned = true;
         }
         if self.done.load(Ordering::SeqCst) {
             Poll::Ready(())
